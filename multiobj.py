@@ -4,75 +4,82 @@ from sklearn.model_selection import train_test_split
 from lightgbm import LGBMClassifier
 from sklearn.metrics import classification_report
 import joblib
-from flask import Flask, request, jsonify
+import streamlit as st
 
-# Load and preprocess data (mock data here)
-data = pd.read_csv('ecommerce_data.csv')
+st.set_page_config(page_title="E-commerce Multi-Objective Recommender")
+st.title("🛒 E-commerce Multi-Objective Recommender")
 
-# Sample features and targets
+# Sample/mock data
+@st.cache_data
+def load_data():
+    return pd.DataFrame({
+        'user_age': [25, 30, 22, 40, 35],
+        'user_location': ['Delhi', 'Mumbai', 'Delhi', 'Bangalore', 'Chennai'],
+        'product_price': [299, 999, 159, 499, 799],
+        'product_category': ['Electronics', 'Clothing', 'Books', 'Electronics', 'Fashion'],
+        'session_duration': [180, 300, 120, 240, 90],
+        'click': [1, 1, 0, 1, 0],
+        'cart': [0, 1, 0, 1, 1],
+        'purchase': [0, 0, 0, 1, 1]
+    })
+
+data = load_data()
+
 features = ['user_age', 'user_location', 'product_price', 'product_category', 'session_duration']
 targets = ['click', 'cart', 'purchase']
 
-# Encode categorical features if needed
-data = pd.get_dummies(data, columns=['user_location', 'product_category'])
+# Preprocessing
+encoded_data = pd.get_dummies(data, columns=['user_location', 'product_category'])
+X = encoded_data.drop(columns=targets)
+y_click = encoded_data['click']
+y_cart = encoded_data['cart']
+y_purchase = encoded_data['purchase']
 
-X = data.drop(columns=targets)
-y_click = data['click']
-y_cart = data['cart']
-y_purchase = data['purchase']
-
-# Split data
+# Split
 X_train, X_test, y_click_train, y_click_test = train_test_split(X, y_click, test_size=0.2, random_state=42)
 _, _, y_cart_train, y_cart_test = train_test_split(X, y_cart, test_size=0.2, random_state=42)
 _, _, y_purchase_train, y_purchase_test = train_test_split(X, y_purchase, test_size=0.2, random_state=42)
 
-# Train models
-click_model = LGBMClassifier().fit(X_train, y_click_train)
-cart_model = LGBMClassifier().fit(X_train, y_cart_train)
-purchase_model = LGBMClassifier().fit(X_train, y_purchase_train)
+# Train or Load Models
+@st.cache_resource
+def train_models():
+    click_model = LGBMClassifier().fit(X_train, y_click_train)
+    cart_model = LGBMClassifier().fit(X_train, y_cart_train)
+    purchase_model = LGBMClassifier().fit(X_train, y_purchase_train)
+    return click_model, cart_model, purchase_model
 
-# Save models
-joblib.dump(click_model, 'click_model.pkl')
-joblib.dump(cart_model, 'cart_model.pkl')
-joblib.dump(purchase_model, 'purchase_model.pkl')
+click_model, cart_model, purchase_model = train_models()
 
-# Test evaluation
-print("CLICK PREDICTION:")
-print(classification_report(y_click_test, click_model.predict(X_test)))
+# Input UI
+st.subheader("Enter User & Product Details")
 
-print("CART PREDICTION:")
-print(classification_report(y_cart_test, cart_model.predict(X_test)))
+user_age = st.slider("User Age", 18, 65, 25)
+user_location = st.selectbox("User Location", data['user_location'].unique())
+product_price = st.number_input("Product Price", value=300)
+product_category = st.selectbox("Product Category", data['product_category'].unique())
+session_duration = st.slider("Session Duration (seconds)", 30, 600, 180)
 
-print("PURCHASE PREDICTION:")
-print(classification_report(y_purchase_test, purchase_model.predict(X_test)))
+if st.button("Predict Actions"):
+    input_df = pd.DataFrame([{
+        'user_age': user_age,
+        'user_location': user_location,
+        'product_price': product_price,
+        'product_category': product_category,
+        'session_duration': session_duration
+    }])
 
-# Setup Flask API
-app = Flask(__name__)
-
-@app.route('/predict', methods=['POST'])
-def predict():
-    data = request.json
-    input_df = pd.DataFrame([data])
     input_df = pd.get_dummies(input_df)
-
-    # Align with training columns
     for col in X.columns:
         if col not in input_df:
             input_df[col] = 0
-    input_df = input_df[X.columns]  # Reorder columns
+    input_df = input_df[X.columns]
 
-    click_model = joblib.load('click_model.pkl')
-    cart_model = joblib.load('cart_model.pkl')
-    purchase_model = joblib.load('purchase_model.pkl')
+    click_pred = click_model.predict(input_df)[0]
+    cart_pred = cart_model.predict(input_df)[0]
+    purchase_pred = purchase_model.predict(input_df)[0]
 
-    predictions = {
-        'click': int(click_model.predict(input_df)[0]),
-        'cart': int(cart_model.predict(input_df)[0]),
-        'purchase': int(purchase_model.predict(input_df)[0])
-    }
+    st.success("Prediction Results:")
+    st.write(f"🖱️ Click Likelihood: {'Yes' if click_pred else 'No'}")
+    st.write(f"🛒 Cart Addition Likelihood: {'Yes' if cart_pred else 'No'}")
+    st.write(f"💳 Purchase Likelihood: {'Yes' if purchase_pred else 'No'}")
 
-    return jsonify(predictions)
-
-if __name__ == '__main__':
-    app.run(debug=True, use_reloader=False)
-    
